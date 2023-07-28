@@ -1,0 +1,6 @@
+mmengine
+mmdet
+mmcv
+mmocr
+albumentations
+pytorch

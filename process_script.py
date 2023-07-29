@@ -1,5 +1,4 @@
 import os.path as osp
-import os
 from ocr_wrapper import OCRWrapper
 
 ocrw = OCRWrapper(det='DBNet',

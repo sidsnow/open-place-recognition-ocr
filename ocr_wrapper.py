@@ -1,70 +1,54 @@
-from mmocr.apis import TextDetInferencer, TextRecInferencer
-from mmocr.structures import TextSpottingDataSample
-from mmocr.visualization import TextSpottingLocalVisualizer
-from mmocr.utils import bbox2poly, crop_img, poly2bbox
-import cv2
-import numpy as np
 import os
 import os.path as osp
+import numpy as np
+import cv2
+import albumentations as A
+from typing import Optional, Union
+from mmocr.apis import MMOCRInferencer
 from tqdm import tqdm
-from typing import Optional, Dict, List
 
 
-class Inferencer:
-    def __init__(self, det=None, det_weights=None, rec=None, rec_weights=None):
-        super().__init__()
-        self.det = TextDetInferencer(model=det, weights=det_weights)
-        self.rec = TextRecInferencer(model=rec, weights=rec_weights)
-        self.vis = TextSpottingLocalVisualizer()
+class OCRWrapper:
+    """
+    pass a folder to a call function of wrapper to process images with augmentation
+    pass a file / np.array / folder / list to OCRWrapper.ocr() to proccess without augmentation
+    """
+    def __init__(self,
+                 det: Optional[str] = 'DBNet',
+                 det_weights: Optional[str] = None,
+                 rec: Optional[str] = 'SVTR',
+                 rec_weights: Optional[str] = None,
+                 augment: Optional[list] = [A.Equalize(by_channels=False, p=1),
+                                            A.Sharpen(alpha=0.3, lightness=0.8, p=1)]
+                 ):
+        """
+        :param det: name or config file for a mmocr detection model
+        :param det_weights: path to detection model weights
+        :param rec: name or config file for a mmocr recognition model
+        :param rec_weights: path to recognition model weights
+        :param augment: inference augmentations. default equalize histogram and sharpen
+        """
+        self.ocr = MMOCRInferencer(det=det,
+                                   det_weights=det_weights,
+                                   rec=rec,
+                                   rec_weights=rec_weights)
+        self.augment = A.Compose(augment)
 
-    def _pack_sample(self, preds: Dict) -> List[TextSpottingDataSample]:
+    def _inputs_to_list(self, inputs):
+        if inputs[-4] != '.':
+            fls = os.listdir(inputs)
+            files = [osp.join(inputs, f) for f in fls]
+        elif isinstance(inputs, (tuple, np.ndarray)):
+            files = list(inputs)
+        else:
+            files = [inputs]
+        return files
 
-        results = []
+    def __call__(self, inputs, save_vis=False, save_pred=False, out_dir='./vis', pred_score_thr=0.78):
+        files = self._inputs_to_list(inputs)
 
-        det_data_sample, rec_data_samples = preds['det'], preds['rec']
-        texts = []
-        for rec_data_sample in rec_data_samples:
-            texts.append(rec_data_sample.pred_text.item)
-        det_data_sample.pred_instances.texts = texts
-        results.append(det_data_sample)
-        return results
+        for file in tqdm(files):
+            img = cv2.imread(file)
 
-    def process_folder(self,
-                       root_dir: str,
-                       out_dir: Optional[str] = None) -> dict:
-        result = {'det': [], 'rec': []}
-
-        inputs = os.listdir(root_dir)
-        for file in tqdm(inputs):
-
-            if self.det:
-                result['det'].append(
-                    self.det(sharpened, return_datasamples=True)['predictions']
-                )
-            if self.rec:
-                det_res = result['det'][:-1]
-                print(result['det'])
-                quad = bbox2poly(poly2bbox(det_res['polygon']))
-                to_res = crop_img(sharpened, quad)
-                result['rec'].append(
-                    self.rec(to_res, return_datasamples=True)['predictions']
-                )
-            preds = self._pack_sample(list(result.items())[-1])
-            self.save_visualization(file, img, preds, out_dir)
-        return result
-
-    def save_visualization(self, img_name, img, preds, out_dir, draw_pred=True, pred_score_thr=0.75):
-        img_out_dir = osp.join(out_dir, 'vis')
-
-        out_file = osp.splitext(img_name)[0]
-        out_file = f'{out_file}.jpg'
-        out_file = osp.join(img_out_dir, out_file)
-
-        self.vis.add_datasample(
-            img_name,
-            img,
-            preds,
-            draw_pred=draw_pred,
-            pred_score_thr=pred_score_thr,
-            out_file=out_file,
-        )
+            inp = self.augment(image=img)['image']
+            self.ocr(inp, save_vis=save_vis, save_pred=save_pred, out_dir=out_dir, pred_score_thr=pred_score_thr)
